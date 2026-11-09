@@ -1,0 +1,16 @@
+# PlatformIO / ESP-IDF build output
+.pio/
+.pioenvs/
+.piolibdeps/
+build/
+sdkconfig
+sdkconfig.old
+sdkconfig.esp32*
+sdkconfig.*.idf-backup
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

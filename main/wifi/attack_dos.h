@@ -20,7 +20,8 @@ typedef enum{
     ATTACK_DOS_METHOD_ROGUE_AP,
     ATTACK_DOS_METHOD_BROADCAST,
     ATTACK_DOS_METHOD_COMBINE_ALL,
-    ATTACK_DOS_METHOD_SUPER_CLONE
+    ATTACK_DOS_METHOD_SUPER_CLONE,
+    ATTACK_DOS_METHOD_TARGETED      ///< deauth a single selected client of the AP
 } attack_dos_methods_t;
 
 /**

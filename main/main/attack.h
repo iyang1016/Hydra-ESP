@@ -30,8 +30,15 @@ typedef enum {
     ATTACK_TYPE_EVIL_TWIN,
     ATTACK_TYPE_BT_SPAM,
     ATTACK_TYPE_CLONE,
-    ATTACK_TYPE_BT_PAYLOAD
+    ATTACK_TYPE_BT_PAYLOAD,
+    ATTACK_TYPE_KARMA,          ///< answer probe requests, become every SSID
+    ATTACK_TYPE_CSA,            ///< channel switch announcement, herd STAs away
+    ATTACK_TYPE_HUNT            ///< unattended PMKID + handshake sweep
 } attack_type_t;
+
+/** Sentinel for "no attack type". attack_status_t.type is uint8_t, so this is
+ *  the uint8_t equivalent of -1 and must not collide with a real type. */
+#define ATTACK_TYPE_NONE 0xFF
 
 /**
  * @brief States of single attack run. 
@@ -87,10 +94,18 @@ void attack_update_status(attack_state_t state);
 
 /**
  * @brief Initialises attack wrapper. This function should be callend only once.
- * 
+ *
  * This function creates all necessary resources for attack wrapper. It has to be called before any attack can be run.
  */
 void attack_init();
+
+/**
+ * @brief Stops the running attack immediately, without changing result content.
+ *
+ * Safe to call when no attack is running. Used by modules that need to hand the
+ * radio back before doing their own thing.
+ */
+void attack_request_stop(void);
 
 /**
  * @brief Allocates status content of given size.

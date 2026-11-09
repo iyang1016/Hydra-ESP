@@ -91,6 +91,11 @@ static void timer_send_beacon(void *arg) {
 }
 
 void attack_beacon_spam_start(uint8_t count, beacon_spam_mode_t mode) {
+    /* Restarting used to create a second timer every time without deleting the
+     * first — each repeat added another 10 Hz sender and eventually the timer
+     * pool ran dry. Tear down anything already running first. */
+    attack_beacon_spam_stop();
+
     active_spam_count = (count > 0 && count <= MAX_SPAM_APS) ? count : 20;
 
     for (int i = 0; i < active_spam_count; i++) {
@@ -100,16 +105,29 @@ void attack_beacon_spam_start(uint8_t count, beacon_spam_mode_t mode) {
     }
 
     const esp_timer_create_args_t args = { .callback = &timer_send_beacon };
-    esp_timer_create(&args, &beacon_timer_handle);
-    esp_timer_start_periodic(beacon_timer_handle, 100000);
+
+    if (esp_timer_create(&args, &beacon_timer_handle) != ESP_OK) {
+        beacon_timer_handle = NULL;
+        ESP_LOGE(TAG, "Beacon timer create failed");
+        return;
+    }
+    if (esp_timer_start_periodic(beacon_timer_handle, 100000) != ESP_OK) {
+        esp_timer_delete(beacon_timer_handle);
+        beacon_timer_handle = NULL;
+        ESP_LOGE(TAG, "Beacon timer start failed");
+        return;
+    }
     ESP_LOGI(TAG, "Beacon spam started. Mode: %d", mode);
 }
 
 void attack_beacon_spam_stop() {
     if (beacon_timer_handle) {
-        esp_timer_stop(beacon_timer_handle);
+        if (esp_timer_is_active(beacon_timer_handle)) {
+            esp_timer_stop(beacon_timer_handle);
+        }
         esp_timer_delete(beacon_timer_handle);
         beacon_timer_handle = NULL;
     }
+    active_spam_count = 0;
     ESP_LOGI(TAG, "Beacon spam stopped.");
 }

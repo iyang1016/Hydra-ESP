@@ -74,7 +74,10 @@ void wifictl_sniffer_start(uint8_t channel) {
     ESP_LOGI(TAG, "Starting promiscuous mode...");
     // ESP32 cannot switch port, if there is some STA connected to AP
     ESP_LOGD(TAG, "Kicking all connected STAs from AP");
-    ESP_ERROR_CHECK(esp_wifi_deauth_sta(0));
+    /* Returns ESP_ERR_WIFI_MODE when the interface isn't in AP mode (attacks
+     * that stop the management AP before sniffing). ESP_ERROR_CHECK here aborted
+     * the firmware in that case. */
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_deauth_sta(0));
     esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
     esp_wifi_set_promiscuous(true);
     esp_wifi_set_promiscuous_rx_cb(&frame_handler);

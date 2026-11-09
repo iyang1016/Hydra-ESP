@@ -55,21 +55,22 @@ const char* bt_payload_get_connected_mac(void) {
 }
 
 static void generate_random_name_and_mac(void) {
-    // 1. Generate a random name (e.g., HydraBT-4829)
+    // 1. Generate a random name (e.g., y4n0-4829)
     uint16_t rand_num = (esp_random() % 9000) + 1000;
-    snprintf(s_current_name, sizeof(s_current_name), "HydraBT-%d", rand_num);
+    snprintf(s_current_name, sizeof(s_current_name), "y4n0-%d", rand_num);
 
-    // 2. Generate 6 random bytes for the MAC address
+    // 2. Generate 6 random bytes for the MAC address (display/reporting only).
+    //    NOTE: esp_base_mac_addr_set() must NOT be called here. It is only valid
+    //    before the controller starts; calling it at runtime errors/aborts and
+    //    was the main cause of the payload attack crashing on every start.
+    //    The BLE random address is owned by NimBLE (see bt_payload_attack_start).
     for (int i = 0; i < 6; i++) {
         s_current_mac[i] = esp_random() & 0xFF;
     }
 
+    s_current_mac[0] = (s_current_mac[0] & 0xFC) | 0x02; // locally-administered
 
-    s_current_mac[0] = (s_current_mac[0] & 0xFC) | 0x02;
-
-    esp_base_mac_addr_set(s_current_mac);
-
-    ESP_LOGI(TAG, "Hardware Base MAC updated to: %02X:%02X:%02X:%02X:%02X:%02X",
+    ESP_LOGI(TAG, "Generated random identity MAC: %02X:%02X:%02X:%02X:%02X:%02X",
              s_current_mac[0], s_current_mac[1], s_current_mac[2],
              s_current_mac[3], s_current_mac[4], s_current_mac[5]);
 }
@@ -228,33 +229,33 @@ static void execute_current_payload(void) {
 static void keyboard_task(void *arg) {
     ESP_LOGI(TAG, "Task started - advertising as \"%s\"", s_current_name);
 
-
-    while (s_running && !s_keyboard->isConnected()) {
-        vTaskDelay(pdMS_TO_TICKS(CONNECT_POLL_MS));
-    }
-
-    if (!s_running) {
-        vTaskDelete(nullptr);
-        return;
-    }
-
-    ESP_LOGI(TAG, "Device connected! Ready for payloads.");
-
+    /* The task must outlive a disconnect. It used to `break` when the host went
+     * away, which left s_running == true with no worker behind it: the attack
+     * looked alive in the UI, could not be restarted (start() bails on
+     * s_running) and could not be stopped cleanly. Now we drop back to waiting
+     * and let BleKeyboard re-advertise. */
     while (s_running) {
-        if (s_run_now && !s_is_busy && s_keyboard->isConnected()) {
-            s_run_now = false;
-            execute_current_payload();
+        while (s_running && !s_keyboard->isConnected()) {
+            vTaskDelay(pdMS_TO_TICKS(CONNECT_POLL_MS));
+        }
+        if (!s_running) break;
+
+        ESP_LOGI(TAG, "Device connected! Ready for payloads.");
+
+        while (s_running && s_keyboard->isConnected()) {
+            if (s_run_now && !s_is_busy) {
+                s_run_now = false;
+                execute_current_payload();
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
 
-
-        if (!s_keyboard->isConnected()) {
-            ESP_LOGI(TAG, "Device disconnected");
-            break;
+        if (s_running) {
+            ESP_LOGI(TAG, "Device disconnected, waiting for a new host");
         }
-
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
+    s_task = nullptr;
     vTaskDelete(nullptr);
 }
 
@@ -294,24 +295,11 @@ extern "C" void bt_payload_attack_start(int payload) {
 
     s_keyboard = new BleKeyboard(s_current_name, KB_MANUFACTURER, KB_BATTERY, nullptr);
 
-
-    struct ble_gap_adv_params adv_params = {
-        .conn_mode = BLE_GAP_CONN_MODE_UND,     // connectable undirected
-        .disc_mode = BLE_GAP_DISC_MODE_GEN,     // general discoverable
-        .itvl_min = BLE_GAP_ADV_ITVL_MS(100),   // 100ms interval
-        .itvl_max = BLE_GAP_ADV_ITVL_MS(150),   // 150ms max
-        .channel_map = 0x07,                    // Channels (37, 38, 39)
-        .filter_policy = 0,
-        .high_duty_cycle = 0,
-    };
-
-
+    // BleKeyboard::begin() spins up NimBLEDevice and starts its own connectable
+    // HID advertising on a background task. Do NOT drive ble_gap_adv_* ourselves
+    // here -- two owners of GAP advertising left the HID service inconsistent and
+    // asserted before the host had synced. Let the library own advertising.
     s_keyboard->begin();
-
-    ble_gap_adv_stop();
-    vTaskDelay(pdMS_TO_TICKS(100));
-    ble_gap_adv_start(BLE_OWN_ADDR_RANDOM, NULL, BLE_HS_FOREVER,
-                      &adv_params, NULL, NULL);
 
     s_running = true;
     s_run_now = false;
@@ -326,9 +314,16 @@ extern "C" void bt_payload_attack_stop(void) {
     if (!s_running) return;
 
     s_running = false;
-    vTaskDelay(pdMS_TO_TICKS(1000));
 
+    // Wait for keyboard_task to observe s_running==false and exit on its own.
+    // Force-deleting it here while it may be mid-payload (using s_keyboard) and
+    // then freeing s_keyboard caused a use-after-free. Poll until it clears its
+    // own handle, with a bounded timeout as a safety net.
+    for (int waited = 0; s_task != nullptr && waited < 4000; waited += 50) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     if (s_task) {
+        ESP_LOGW(TAG, "Task did not exit in time, forcing delete");
         vTaskDelete(s_task);
         s_task = nullptr;
     }

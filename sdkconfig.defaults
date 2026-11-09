@@ -1,1 +1,40 @@
+# Minimal sdkconfig.defaults for building under PlatformIO (esp-idf framework).
+# Only the settings that the firmware functionally depends on are pinned here;
+# everything else takes the ESP-IDF default. Partition table + flash size are
+# set in platformio.ini (board_build.partitions / board_upload.flash_size).
+#
+# NOTE: do NOT paste a full idf.py-generated sdkconfig here — choice-member
+# "is not set" lines crash kconfgen on newer ESP-IDF. Keep this curated.
+
+# Flash (DevKit V1 / WROOM-32 has 4MB; use it so SPIFFS has room)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# WiFi
 CONFIG_ESP32_WIFI_NVS_ENABLED=n
+
+# Management AP default credentials (y4n0 branding)
+CONFIG_MGMT_AP_SSID="y4n0"
+CONFIG_MGMT_AP_PASSWORD="notforfun"
+
+# Keep IRAM within bounds (BT+WiFi+NimBLE together overflow the default layout).
+# Optimize for size and move WiFi paths out of IRAM into flash.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_ESP32_WIFI_IRAM_OPT=n
+CONFIG_ESP32_WIFI_RX_IRAM_OPT=n
+
+# Bluetooth controller + NimBLE host (BLE only)
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+
+# NimBLE roles (spam = broadcaster, payload HID = peripheral; central/observer
+# for the future GATT/recon work)
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+
+# NimBLE security (HID pairing)
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=y
+CONFIG_BT_NIMBLE_SM_LEGACY=y
+CONFIG_BT_NIMBLE_SM_SC=y

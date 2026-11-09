@@ -19,10 +19,15 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "attack_deauth_detector.h"
 #include "bt_payload_attack.h"
 #include "wifi_controller.h"
 #include "attack.h"
+#include "attack_method.h"
+#include "attack_client_scan.h"
 #include "pcap_serializer.h"
 #include "hccapx_serializer.h"
 #include "attack_eviltwin.h"
@@ -154,7 +159,7 @@ static esp_err_t uri_capture_pcap_get_handler(httpd_req_t *req) {
 
 static esp_err_t uri_capture_hccapx_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/octet-stream");
-    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=hydra_capture.hccapx");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=y4n0_capture.hccapx");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
     return httpd_resp_send(req, (char *)hccapx_serializer_get(), sizeof(hccapx_t));
 }
@@ -193,26 +198,32 @@ static esp_err_t uri_detector_status_handler(httpd_req_t *req) {
     const deauth_detector_status_t *s = deauth_detector_get_status();
     httpd_resp_set_type(req, "application/json");
 
-    char json[1024] = "{\"running\":";
-    strcat(json, s->running ? "true" : "false");
-    strcat(json, ",\"alerts\":[");
+    char json[1024];
+    int n = snprintf(json, sizeof(json), "{\"running\":%s,\"alerts\":[",
+                     s->running ? "true" : "false");
+    if (n < 0 || n >= (int)sizeof(json)) n = 0;
 
     bool first = true;
-    for (int i = 0; i < s->count; i++) {
+    for (int i = 0; i < s->count && n < (int)sizeof(json) - 80; i++) {
         if (!s->entries[i].alerting) continue;
-        if (!first) strcat(json, ",");
+
+        n += snprintf(json + n, sizeof(json) - n,
+                      "%s{\"bssid\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"count\":%d}",
+                      first ? "" : ",",
+                      s->entries[i].bssid[0], s->entries[i].bssid[1],
+                      s->entries[i].bssid[2], s->entries[i].bssid[3],
+                      s->entries[i].bssid[4], s->entries[i].bssid[5],
+                      s->entries[i].count);
         first = false;
-        char entry[128];
-        snprintf(entry, sizeof(entry),
-                 "{\"bssid\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"count\":%d}",
-                 s->entries[i].bssid[0], s->entries[i].bssid[1],
-                 s->entries[i].bssid[2], s->entries[i].bssid[3],
-                 s->entries[i].bssid[4], s->entries[i].bssid[5],
-                 s->entries[i].count);
-        strcat(json, entry);
     }
-    strcat(json, "]}");
-    return httpd_resp_send(req, json, strlen(json));
+
+    if (n < (int)sizeof(json) - 2) {
+        json[n++] = ']';
+        json[n++] = '}';
+        json[n]   = '\0';
+    }
+
+    return httpd_resp_send(req, json, n);
 }
 
 static esp_err_t uri_evil_twin_status_handler(httpd_req_t *req) {
@@ -236,6 +247,83 @@ static esp_err_t uri_evil_twin_status_handler(httpd_req_t *req) {
                  "{\"status\":\"STOPPED\",\"wrong_attempts\":%d}", wrong_attempts);
     }
     return httpd_resp_send(req, json, strlen(json));
+}
+
+
+/* ─────────────────────── Client scan / targeting ────────────────────────── */
+
+/* AP record snapshot for the background scan task (records[] may change). */
+static wifi_ap_record_t s_scan_ap;
+
+static void client_scan_task(void *arg) {
+    /* Blocking timed scan: drops the mgmt AP, sniffs, then restores the web UI. */
+    client_scan_run(&s_scan_ap, 8000);
+    vTaskDelete(NULL);
+}
+
+/* POST /client-scan  body: AP index (ascii). Fires an ~8s background scan; the
+ * web UI drops out during the scan and should reconnect, then GET /client-list. */
+static esp_err_t uri_client_scan_handler(httpd_req_t *req) {
+    char buf[16];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) return ESP_FAIL;
+    buf[ret] = '\0';
+
+    if (client_scan_is_running()) {
+        return httpd_resp_sendstr(req, "BUSY");
+    }
+
+    unsigned idx = (unsigned)atoi(buf);
+    const wifi_ap_record_t *ap = wifictl_get_ap_record(idx);
+    if (ap == NULL) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid AP index");
+    }
+    memcpy(&s_scan_ap, ap, sizeof(wifi_ap_record_t));
+
+    /* Respond before the scan starts — it will tear down this very server. */
+    httpd_resp_sendstr(req, "SCANNING");
+    xTaskCreate(client_scan_task, "client_scan", 4096, NULL, 5, NULL);
+    return ESP_OK;
+}
+
+/* GET /client-list  -> JSON list of clients found in the last scan. */
+static esp_err_t uri_client_list_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+
+    uint8_t count = 0;
+    const client_record_t *list = client_scan_get_list(&count);
+
+    char json[1024];
+    int n = snprintf(json, sizeof(json), "{\"scanning\":%s,\"clients\":[",
+                     client_scan_is_running() ? "true" : "false");
+
+    for (uint8_t i = 0; i < count && n < (int)sizeof(json) - 80; i++) {
+        n += snprintf(json + n, sizeof(json) - n,
+                      "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"rssi\":%d,\"frames\":%u}",
+                      i ? "," : "",
+                      list[i].mac[0], list[i].mac[1], list[i].mac[2],
+                      list[i].mac[3], list[i].mac[4], list[i].mac[5],
+                      list[i].rssi, list[i].frames);
+    }
+    n += snprintf(json + n, sizeof(json) - n, "]}");
+    return httpd_resp_send(req, json, n);
+}
+
+/* POST /set-target-client  body: "AA:BB:CC:DD:EE:FF" -> stores targeted-deauth MAC. */
+static esp_err_t uri_set_target_client_handler(httpd_req_t *req) {
+    char buf[32];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) return ESP_FAIL;
+    buf[ret] = '\0';
+
+    unsigned m[6];
+    if (sscanf(buf, "%x:%x:%x:%x:%x:%x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) != 6) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad MAC");
+    }
+    uint8_t mac[6];
+    for (int i = 0; i < 6; i++) mac[i] = (uint8_t)m[i];
+    attack_method_set_target_client(mac);
+    return httpd_resp_sendstr(req, "OK");
 }
 
 
@@ -280,15 +368,32 @@ static esp_err_t uri_bt_payload_run_handler(httpd_req_t *req) {
 }
 
 static esp_err_t uri_log_post_handler(httpd_req_t *req) {
-    char buf[2048];
-    int ret = httpd_req_recv(req, buf, req->content_len);
-    if (ret <= 0) return ESP_FAIL;
-    buf[ret] = '\0';
-
+    /* Was: stack buffer[2048] read with req->content_len. Any body bigger than
+     * the buffer wrote straight past it. Stream to the file in fixed chunks so
+     * the size of the POST no longer matters. */
     FILE *f = fopen("/spiffs/passwords.txt", "w");
-    if (f == NULL) return ESP_FAIL;
-    fprintf(f, "%s", buf);
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Cannot open passwords.txt for writing");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "fs error");
+    }
+
+    char buf[512];
+    int remaining = req->content_len;
+    bool ok = true;
+
+    while (remaining > 0) {
+        int want = (remaining < (int)sizeof(buf)) ? remaining : (int)sizeof(buf);
+        int ret  = httpd_req_recv(req, buf, want);
+        if (ret <= 0) { ok = false; break; }
+        if (fwrite(buf, 1, (size_t)ret, f) != (size_t)ret) { ok = false; break; }
+        remaining -= ret;
+    }
+
     fclose(f);
+
+    if (!ok) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv failed");
+    }
     return httpd_resp_sendstr(req, "Logged");
 }
 
@@ -364,6 +469,7 @@ static httpd_uri_t uri_download_pass = { .uri = "/download-pass",    .method = H
 static httpd_uri_t uri_get_log_url   = { .uri = "/get-log-url",      .method = HTTP_GET,  .handler = uri_get_log_url_handler };
 static httpd_uri_t uri_det_status    = { .uri = "/detector/status",  .method = HTTP_GET,  .handler = uri_detector_status_handler };
 static httpd_uri_t uri_evil_status   = { .uri = "/evil-twin-status", .method = HTTP_GET,  .handler = uri_evil_twin_status_handler };
+static httpd_uri_t uri_client_list   = { .uri = "/client-list",      .method = HTTP_GET,  .handler = uri_client_list_handler };
 
 
 static httpd_uri_t uri_icons  = { .uri = "/icons/*",      .method = HTTP_GET, .handler = common_get_handler };
@@ -384,6 +490,8 @@ static httpd_uri_t uri_set_log_url   = { .uri = "/set-log-url",      .method = H
 static httpd_uri_t uri_det_start     = { .uri = "/detector/start",   .method = HTTP_POST, .handler = uri_detector_start_handler };
 static httpd_uri_t uri_det_stop      = { .uri = "/detector/stop",    .method = HTTP_POST, .handler = uri_detector_stop_handler };
 static httpd_uri_t uri_save_settings = { .uri = "/save_settings",    .method = HTTP_POST, .handler = save_settings_post_handler };
+static httpd_uri_t uri_client_scan   = { .uri = "/client-scan",      .method = HTTP_POST, .handler = uri_client_scan_handler };
+static httpd_uri_t uri_set_target    = { .uri = "/set-target-client", .method = HTTP_POST, .handler = uri_set_target_client_handler };
 
 
 /* ─────────────────────────── Public API ─────────────────────────────────── */
@@ -425,6 +533,7 @@ void webserver_run(void) {
     httpd_register_uri_handler(server, &uri_get_log_url);
     httpd_register_uri_handler(server, &uri_det_status);
     httpd_register_uri_handler(server, &uri_evil_status);
+    httpd_register_uri_handler(server, &uri_client_list);
 
 
     httpd_register_uri_handler(server, &uri_icons);
@@ -445,8 +554,10 @@ void webserver_run(void) {
     httpd_register_uri_handler(server, &uri_det_start);
     httpd_register_uri_handler(server, &uri_det_stop);
     httpd_register_uri_handler(server, &uri_save_settings);
+    httpd_register_uri_handler(server, &uri_client_scan);
+    httpd_register_uri_handler(server, &uri_set_target);
 
-    ESP_LOGI(TAG, "Webserver started — %d handlers registered.", 24);
+    ESP_LOGI(TAG, "Webserver started — handlers registered.");
 }
 
 

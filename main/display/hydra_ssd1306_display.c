@@ -109,6 +109,9 @@ static const char *get_attack_name(uint8_t type)
         case ATTACK_TYPE_BT_SPAM:     return "BT Spam";
         case ATTACK_TYPE_CLONE:       return "AP Clone";
         case ATTACK_TYPE_BT_PAYLOAD:  return "BT Payload";
+        case ATTACK_TYPE_KARMA:       return "KARMA";
+        case ATTACK_TYPE_CSA:         return "CSA Hijack";
+        case ATTACK_TYPE_HUNT:        return "Auto Hunt";
         default:                      return "Unknown";
     }
 }
@@ -179,7 +182,7 @@ static void draw_running_infinite(const char *attack_name)
 static void draw_standby_disconnected(void)
 {
     u8g2_SetFont(&u8g2, u8g2_font_helvB08_tr);
-    draw_title_bar("HYDRA-ESP");
+    draw_title_bar("y4n0");
 
     u8g2_SetFont(&u8g2, u8g2_font_profont12_mr);
     u8g2_DrawStr(&u8g2, 4, 30, "Not connected");
@@ -209,7 +212,7 @@ static void draw_standby_connected(int frame)
     }
 
     u8g2_SetFont(&u8g2, u8g2_font_profont12_mr);
-    u8g2_DrawStr(&u8g2, 4, 28, "HYDRA ONLINE");
+    u8g2_DrawStr(&u8g2, 4, 28, "y4n0 ONLINE");
 
     u8g2_SetFont(&u8g2, u8g2_font_5x7_mr);
     u8g2_DrawStr(&u8g2, 4, 42, "AP: 192.168.4.1");
@@ -313,7 +316,7 @@ static void boot_animation(void)
 
     u8g2_ClearBuffer(&u8g2);
     u8g2_SetFont(&u8g2, u8g2_font_profont22_mr);
-    draw_title_bar("HYDRA-ESP");
+    draw_title_bar("y4n0");
 
     u8g2_SendBuffer(&u8g2);
     vTaskDelay(pdMS_TO_TICKS(1800));

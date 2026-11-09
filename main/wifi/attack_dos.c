@@ -28,6 +28,7 @@ void attack_dos_start(attack_config_t *attack_config) {
     switch (method) {
         case ATTACK_DOS_METHOD_BROADCAST:
         case ATTACK_DOS_METHOD_COMBINE_ALL:
+        case ATTACK_DOS_METHOD_TARGETED:
             wifictl_mgmt_ap_stop();
             break;
         default:
@@ -52,6 +53,9 @@ void attack_dos_start(attack_config_t *attack_config) {
                 attack_method_rogueap(ap_record);
                 attack_method_super_clone(ap_record);
                 break;
+            case ATTACK_DOS_METHOD_TARGETED:
+                attack_method_targeted(ap_record);
+                break;
         }
     }
 }
@@ -74,6 +78,10 @@ void attack_dos_stop() {
             attack_method_super_clone_stop();
             wifictl_mgmt_ap_start();
             wifictl_restore_ap_mac();
+            break;
+        case ATTACK_DOS_METHOD_TARGETED:
+            attack_method_targeted_stop();
+            wifictl_mgmt_ap_start();
             break;
         default:
             ESP_LOGE(TAG, "Unknown attack method! Attack may not be stopped properly.");

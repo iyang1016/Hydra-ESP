@@ -33,7 +33,11 @@ static uint8_t captured_eapol_frames = 0;
 static TaskHandle_t monitor_task_handle = NULL;
 static bool is_running = false;
 
-#define MIN_EAPOL_REQUIRED 4
+/* A crackable hccapx needs message 1 (ANonce) plus message 2 (SNonce + MIC).
+ * Requiring all four frames almost never completes in practice — the AP drops
+ * msg3 retransmits and the last frame is routinely lost — so a "successful"
+ * capture was reported as aborted. Two frames is the real minimum. */
+#define MIN_EAPOL_REQUIRED 2
 
 /**
  * @brief Callback for DATA_FRAME_EVENT_EAPOLKEY_FRAME event.

@@ -35,9 +35,10 @@ typedef struct {
     uint16_t timeout;
     uint8_t ap_count;
     uint8_t ap_record_ids[MAX_ATTACK_TARGETS];
-} __attribute__((packed)) attack_request_t;
+} __attribute__((packed)) attack_request_t; // এখন সাইজ ঠিক ২১ বাইট হবে
 
 void webserver_run();
+// webserver.h ফাইলের শেষে যোগ করুন
 void webserver_stop(void);
 
 

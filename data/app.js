@@ -10,7 +10,10 @@ var AttackTypeEnum  = {
     ATTACK_TYPE_EVIL_TWIN:   6,
     ATTACK_TYPE_BT_SPAM:     7,
     ATTACK_TYPE_CLONE:       8,
-    ATTACK_TYPE_BT_PAYLOAD:  9
+    ATTACK_TYPE_BT_PAYLOAD:  9,
+    ATTACK_TYPE_KARMA:       10,
+    ATTACK_TYPE_CSA:         11,
+    ATTACK_TYPE_HUNT:        12
 };
 
 var selectedApElements    = [];
@@ -25,27 +28,31 @@ var btStatusTimer         = null;
 
 var DISCONNECTS_MGMT_AP = [
     AttackTypeEnum.ATTACK_TYPE_DOS,
-AttackTypeEnum.ATTACK_TYPE_EVIL_TWIN,
-AttackTypeEnum.ATTACK_TYPE_CLONE
+    AttackTypeEnum.ATTACK_TYPE_EVIL_TWIN,
+    AttackTypeEnum.ATTACK_TYPE_CLONE,
+    AttackTypeEnum.ATTACK_TYPE_KARMA,
+    AttackTypeEnum.ATTACK_TYPE_CSA,
+    AttackTypeEnum.ATTACK_TYPE_HUNT
 ];
 
 var NO_TIMEOUT_TYPES = [
     AttackTypeEnum.ATTACK_TYPE_HANDSHAKE,
 AttackTypeEnum.ATTACK_TYPE_PMKID,
 AttackTypeEnum.ATTACK_TYPE_EVIL_TWIN,
-AttackTypeEnum.ATTACK_TYPE_BT_PAYLOAD
+AttackTypeEnum.ATTACK_TYPE_BT_PAYLOAD,
+    AttackTypeEnum.ATTACK_TYPE_HUNT
 ];
 
 /* ── Boot ────────────────────────────────────────── */
 window.onload = function () {
     defaultAttackMethodsHTML = document.getElementById("attack_method").outerHTML;
 
-    var savedTheme = localStorage.getItem("hydra_theme") || "dark";
+    var savedTheme = localStorage.getItem("y4n0_theme") || "dark";
     document.documentElement.setAttribute("data-theme", savedTheme);
 
     attachRippleToAll();
 
-    if (localStorage.getItem("hydra_disclaimer_v1") === "accepted") {
+    if (localStorage.getItem("y4n0_disclaimer_v1") === "accepted") {
         document.getElementById("disclaimer-overlay").style.display = "none";
         init();
     } else {
@@ -56,7 +63,7 @@ window.onload = function () {
 };
 
 function dismissDisclaimer() {
-    localStorage.setItem("hydra_disclaimer_v1", "accepted");
+    localStorage.setItem("y4n0_disclaimer_v1", "accepted");
     document.getElementById("disclaimer-overlay").style.display = "none";
     init();
 }
@@ -72,7 +79,7 @@ function toggleTheme() {
     var html  = document.documentElement;
     var theme = html.getAttribute("data-theme") === "dark" ? "light" : "dark";
     html.setAttribute("data-theme", theme);
-    localStorage.setItem("hydra_theme", theme);
+    localStorage.setItem("y4n0_theme", theme);
 }
 
 /* ── Ripple effect ───────────────────────────────── */
@@ -174,6 +181,9 @@ function getMaxTargets() {
     if (attackType === AttackTypeEnum.ATTACK_TYPE_HANDSHAKE) return 1;
     if (attackType === AttackTypeEnum.ATTACK_TYPE_PMKID)     return 1;
     if (attackType === AttackTypeEnum.ATTACK_TYPE_CLONE)     return 1;
+    if (attackType === AttackTypeEnum.ATTACK_TYPE_KARMA)     return 1;
+    if (attackType === AttackTypeEnum.ATTACK_TYPE_CSA)       return 8;
+    if (attackType === AttackTypeEnum.ATTACK_TYPE_HUNT)      return 8;
     if (attackType === AttackTypeEnum.ATTACK_TYPE_DOS) {
         if (!isNaN(attackMethod) && attackMethod === 1) return 16;
         return 1;
@@ -227,6 +237,76 @@ function enforceSelectionLimit() {
     }
     updateSelectedChips();
     updateSelectedCountBadge();
+    updateClientTargetVisibility();
+}
+
+/* ── Targeted client deauth UI ───────────────────────────────────────────── */
+var ATTACK_DOS_METHOD_TARGETED = 4;
+
+function isTargetedDeauthSelected() {
+    var type   = parseInt(document.getElementById("attack_type").value);
+    var method = parseInt(document.getElementById("attack_method").value);
+    return type === AttackTypeEnum.ATTACK_TYPE_DOS && method === ATTACK_DOS_METHOD_TARGETED;
+}
+
+function updateClientTargetVisibility() {
+    var box = document.getElementById("client_target");
+    if (box) box.style.display = isTargetedDeauthSelected() ? "block" : "none";
+}
+
+function scanClients() {
+    if (selectedApElements.length === 0) {
+        showDialog("Select one target network in the Scan tab first.");
+        return;
+    }
+    var apId = selectedApElements[0];
+    var btn  = document.getElementById("scan_clients_btn");
+    var hint = document.getElementById("client_scan_hint");
+    if (btn)  { btn.disabled = true; btn.textContent = "Scanning…"; }
+    if (hint) hint.textContent = "Scanning for ~8s — you may briefly lose this page. Reconnect; results load automatically.";
+
+    var oReq = new XMLHttpRequest();
+    oReq.open("POST", "http://192.168.4.1/client-scan", true);
+    oReq.timeout = 4000;
+    /* The device tears down the AP right after replying, so a failed/aborted
+     * response is expected — either way we wait, then poll for the list. */
+    oReq.onload    = function () { setTimeout(loadClientList, 11000); };
+    oReq.onerror   = function () { setTimeout(loadClientList, 11000); };
+    oReq.ontimeout = function () { setTimeout(loadClientList, 11000); };
+    oReq.send(String(apId));
+}
+
+function loadClientList() {
+    var sel  = document.getElementById("client_select");
+    var btn  = document.getElementById("scan_clients_btn");
+    var hint = document.getElementById("client_scan_hint");
+
+    var oReq = new XMLHttpRequest();
+    oReq.responseType = "json";
+    oReq.timeout = 5000;
+    oReq.onload = function () {
+        var data = oReq.response;
+        if (btn) { btn.disabled = false; btn.textContent = "Rescan Clients"; }
+        if (!data || !data.clients || data.clients.length === 0) {
+            if (hint) hint.textContent = "No clients found. Move closer or try again (only active devices show up).";
+            return;
+        }
+        while (sel.options.length > 0) sel.remove(0);
+        data.clients.forEach(function (c) {
+            var opt = document.createElement("option");
+            opt.value = c.mac;
+            opt.text  = c.mac + "  (" + c.rssi + " dBm, " + c.frames + " frames)";
+            sel.appendChild(opt);
+        });
+        sel.selectedIndex = 0;
+        if (hint) hint.textContent = data.clients.length + " device(s) found. Pick one, then Launch Attack.";
+    };
+    oReq.onerror = oReq.ontimeout = function () {
+        if (btn) { btn.disabled = false; btn.textContent = "Rescan Clients"; }
+        if (hint) hint.textContent = "Could not reach ESP32 yet — reconnect to the AP and press Rescan Clients.";
+    };
+    oReq.open("GET", "http://192.168.4.1/client-list", true);
+    oReq.send();
 }
 
 function updateSelectedChips() {
@@ -290,7 +370,7 @@ function updateConfigurableFields(el) {
         case AttackTypeEnum.ATTACK_TYPE_DOS:
             document.getElementById("attack_timeout").value = 2;
             if (noTimeoutNote) noTimeoutNote.style.display = "block";
-            setAttackMethods(["BSSID Clone (Aggressive)", "Normal Deauth", "Combined Deauth", "Multi-Clone Deauth"]);
+            setAttackMethods(["BSSID Clone (Aggressive)", "Normal Deauth", "Combined Deauth", "Multi-Clone Deauth", "Targeted Client Deauth"]);
         break;
 
         /* ── FIX #2: methodRow was previously hidden here, making mode never selectable.
@@ -364,6 +444,22 @@ function updateConfigurableFields(el) {
         case AttackTypeEnum.ATTACK_TYPE_BT_PAYLOAD:
             if (methodRow) methodRow.style.display = "none";
             break;
+        case AttackTypeEnum.ATTACK_TYPE_KARMA:
+            /* KARMA is a single-target rogue: it answers probes for the target's
+             * channel and impersonates whatever SSIDs clients ask for. */
+            document.getElementById("attack_timeout").value = 5;
+            if (methodRow) methodRow.style.display = "none";
+            break;
+        case AttackTypeEnum.ATTACK_TYPE_CSA:
+            /* Pick as many APs as you like — every one of them gets told to move.
+             * Option order matches csa_mode_t: 0 = push, 1 = rotate. */
+            document.getElementById("attack_timeout").value = 5;
+            setAttackMethods(["Single Push", "Rotate Channel"]);
+            break;
+        case AttackTypeEnum.ATTACK_TYPE_HUNT:
+            /* Runs to completion on its own; timeout is intentionally absent. */
+            if (methodRow) methodRow.style.display = "none";
+            break;
     }
     enforceSelectionLimit();
 }
@@ -401,6 +497,25 @@ function runAttack() {
     if (needsAp && selectedApElements.length === 0) {
         showDialog("Please select at least one target network before launching the attack.");
         return false;
+    }
+
+    /* Targeted client deauth: a client must be selected, and we must push its MAC
+     * to the device before launching so the firmware knows whom to hit. */
+    if (isTargetedDeauthSelected()) {
+        var clientSel = document.getElementById("client_select");
+        var clientMac = clientSel ? clientSel.value : "";
+        if (!clientMac) {
+            showDialog("Scan and select a target client first.");
+            return false;
+        }
+        try {
+            var macReq = new XMLHttpRequest();
+            macReq.open("POST", "http://192.168.4.1/set-target-client", false); /* sync: must land before attack */
+            macReq.send(clientMac);
+        } catch (e) {
+            showError("Could not set target client. Reconnect to the ESP32 and retry.");
+            return false;
+        }
     }
 
     var MAX_TARGETS = 16;

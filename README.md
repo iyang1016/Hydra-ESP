@@ -1,9 +1,9 @@
 
 
-# Hydra-ESP
+# y4n0
 
 <div align="center">
-<img src="resources/hydra_logo.png" alt="Hydra-ESP Logo" width="350"/>
+<img src="resources/hydra_logo.png" alt="y4n0 Logo" width="350"/>
 </div>
 
 [![Stars](https://img.shields.io/github/stars/SameerAlSahab/ESP32-Deauther?style=for-the-badge&color=yellow)](https://github.com/SameerAlSahab/ESP32-Deauther/stargazers)
@@ -15,7 +15,7 @@
 [![Repo Size](https://img.shields.io/github/repo-size/SameerAlSahab/ESP32-Deauther?style=for-the-badge&color=informational)](https://github.com/SameerAlSahab/ESP32-Deauther)
 [![Contributors](https://img.shields.io/github/contributors/SameerAlSahab/ESP32-Deauther?style=for-the-badge&color=pink)](https://github.com/SameerAlSahab/ESP32-Deauther/graphs/contributors)
 
-A wireless security research firmware for the ESP32 microcontroller. Built on top of [risinek's](https://github.com/risinek/esp32-wifi-penetration-tool) original ESP32 Wi-Fi penetration tool foundation, ProjectHydraOS extends the original with a redesigned web interface, multi-target deauthentication, BLE attack capabilities, a deauth attack detector, optional OLED display support, and several additional attack modules.
+A wireless security research firmware for the ESP32 microcontroller. Built on top of [risinek's](https://github.com/risinek/esp32-wifi-penetration-tool) original ESP32 Wi-Fi penetration tool foundation, y4n0 extends the original with a redesigned web interface, multi-target deauthentication, BLE attack capabilities, a deauth attack detector, optional OLED display support, and several additional attack modules.
 
 ---
 
@@ -116,7 +116,7 @@ Supported targets include AirPods (all generations), AirPods Pro (all generation
 
 ### BT Payload 
 
-Advertises the ESP32 as a Bluetooth HID keyboard under the name "Hydra-RandomNumber". When a Windows PC pairs with it, the firmware sends keystrokes to perform the payloads.
+Advertises the ESP32 as a Bluetooth HID keyboard under the name "y4n0-RandomNumber". When a Windows PC pairs with it, the firmware sends keystrokes to perform the payloads.
 
 ---
 
@@ -142,7 +142,7 @@ Accessible at `http://192.168.4.1` after connecting to the device's management A
 
 | Field    | Default         |
 |----------|-----------------|
-| SSID     | `hydra`  |
+| SSID     | `y4n0`  |
 | Password | `notforfun`  |
 | Web UI   | `192.168.4.1`   |
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>HydraESP</title>
+  <title>y4n0</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
@@ -18,7 +18,7 @@
     <div class="disclaimer-header">
       <img src="/icons/skull.png" class="disclaimer-header-icon" alt="">
       <div>
-        <span class="disclaimer-logo-name">Hydra-ESP</span>
+        <span class="disclaimer-logo-name">y4n0</span>
         <span class="disclaimer-logo-ver">v1.1.3 — Authorised Use Only</span>
       </div>
     </div>
@@ -44,7 +44,7 @@
 
       <div class="disclaimer-section">
         <h2>What This Tool Can Do</h2>
-        <p>Hydra-ESP can perform deauthentication attacks, handshake capture, PMKID capture,
+        <p>y4n0 can perform deauthentication attacks, handshake capture, PMKID capture,
            Evil Twin attacks, beacon spam, BLE advertising, and rogue AP cloning. All of these
            techniques can disrupt real wireless networks and constitute criminal offences if used
            without authorisation.</p>
@@ -63,7 +63,7 @@
 
       <div class="disclaimer-section">
         <h2>Liability</h2>
-        <p>The authors and contributors of HydraESP accept <strong>no liability</strong>
+        <p>The authors and contributors of y4n0 accept <strong>no liability</strong>
            for misuse. You, the operator, are solely responsible for any harm, legal consequence,
            or damage arising from your use of this firmware.</p>
       </div>
@@ -102,7 +102,7 @@
     <div class="brand">
       <img src="/icons/logo.png" class="brand-icon" alt="">
       <div>
-        <span class="brand-name">Hydra-ESP</span>
+        <span class="brand-name">y4n0</span>
       </div>
     </div>
     <button class="icon-btn theme-toggle" onclick="toggleTheme()" aria-label="Toggle light / dark mode">
@@ -279,7 +279,7 @@
             <button onclick="setBtPayloadAndRun(2)" class="bt-payload-btn">Play Rick Roll (YouTube)</button>
             <button onclick="setBtPayloadAndRun(3)" class="bt-payload-btn">Set Warning Wallpaper *</button>
             <button onclick="setBtPayloadAndRun(4)" class="bt-payload-btn">Grab Wi-Fi Passwords **</button>
-            <button onclick="setBtPayloadAndRun(5)" class="bt-payload-btn">Hydra God Mode</button>
+            <button onclick="setBtPayloadAndRun(5)" class="bt-payload-btn">y4n0 God Mode</button>
           </div>
 
           <div class="info-box info-warn" style="text-align:left; margin:0 0 12px;">
@@ -369,6 +369,9 @@
               <button type="button" class="type-btn" onclick="selectAttackType(7,this)">BLE Spam</button>
               <button type="button" class="type-btn" onclick="selectAttackType(8,this)">Super Clone</button>
               <button type="button" class="type-btn" onclick="selectAttackType(9,this)">BT Payload</button>
+              <button type="button" class="type-btn" onclick="selectAttackType(10,this)">KARMA</button>
+              <button type="button" class="type-btn" onclick="selectAttackType(11,this)">CSA Hijack</button>
+              <button type="button" class="type-btn" onclick="selectAttackType(12,this)">Auto Hunt</button>
             </div>
             <input type="hidden" id="attack_type" value="">
           </div>
@@ -384,6 +387,23 @@
             <label class="form-label" for="beacon_count">Number of Fake Networks</label>
             <input type="number" id="beacon_count" min="1" max="100" value="20"
                    style="width:120px; min-width:120px;">
+          </div>
+
+          <div id="client_target" style="display:none;" class="form-row">
+            <label class="form-label" for="client_select">Target Client (device on the AP)</label>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <select id="client_select" style="flex:1; min-width:200px;">
+                <option value="" selected disabled hidden>Scan clients first</option>
+              </select>
+              <button type="button" id="scan_clients_btn" class="btn-secondary" onclick="scanClients()">
+                Scan Clients
+              </button>
+            </div>
+            <p class="form-hint" id="client_scan_hint" style="margin-top:10px;">
+              Select one target network in the Scan tab, then press <strong>Scan Clients</strong>.
+              The device drops the management AP for ~8&nbsp;s while it sniffs — you will briefly
+              lose this page; reconnect and the device list appears here.
+            </p>
           </div>
 
           <div class="form-row" id="timeout-row">
@@ -462,7 +482,7 @@
         <img src="/icons/tips.png" class="info-label-icon" alt="">
         Legal Notice
       </div>
-      Hydra-ESP is an educational security research tool for the ESP32. It must only be used
+      y4n0 is an educational security research tool for the ESP32. It must only be used
       on networks you own or have explicit written authorisation to audit. Misuse is solely the
       responsibility of the user.
     </div>

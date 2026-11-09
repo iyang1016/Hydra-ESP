@@ -108,5 +108,9 @@ void frame_analyzer_capture_start(search_type_t search_type_arg, const uint8_t *
 }
 
 void frame_analyzer_capture_stop(){
-    ESP_ERROR_CHECK(esp_event_handler_unregister(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, &data_frame_handler));
+    /* Called on every teardown path, including ones where the capture was
+     * already stopped (aborted worker, double stop). ESP_ERROR_CHECK here
+     * aborted the firmware on ESP_ERR_NOT_FOUND. */
+    ESP_ERROR_CHECK_WITHOUT_ABORT(
+        esp_event_handler_unregister(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, &data_frame_handler));
 }
